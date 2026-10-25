@@ -1,0 +1,129 @@
+---
+title: "HSE 103 Final Project: Submission 1"
+author: "Azaire Andre"
+date: "October 26, 2026"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+
+# Load packages
+library(tidyverse)
+```
+
+# Data Import
+
+```{r}
+# Read in covariate data
+covarData <- read.csv(file = "GSE85307_covar-1.csv")
+
+# Read in gene expression data
+geneExpression <- read.csv(file = "GSE85307_geneExpression.csv",
+                           row.names = 1)
+
+# Read in gene name linker
+geneNames <- read.csv(file = "GSE85307_geneNames.csv",
+                      row.names = 1)
+
+# Check dimensions
+dim(covarData)
+dim(geneExpression)
+dim(geneNames)
+```
+
+```{r}
+# Check if geoID values match gene expression column names
+all(covarData$geoID %in% colnames(geneExpression))
+
+# Check if all gene expression column names are in covariate data
+all(colnames(geneExpression) %in% covarData$geoID)
+
+# Find probe ID for TBL1X
+geneNames[geneNames[,1] == "TBL1X", , drop = FALSE]
+```
+```{r}
+# Create project data frame
+projectData <- covarData
+
+# Add TBL1X expression matched by geoID
+projectData$TBL1X <- as.numeric(unlist(
+  geneExpression["8165911", projectData$geoID]
+))
+
+# Check TBL1X values
+summary(projectData$TBL1X)
+```
+```{r}
+# Remove text from BMI values
+projectData$mat_BMI <- sub("bmi_kg/m2: ",
+                           "",
+                           projectData$mat_BMI)
+
+# Convert BMI to numeric
+projectData$mat_BMI <- as.numeric(projectData$mat_BMI)
+
+# Calculate median BMI
+medianBMI <- median(projectData$mat_BMI,
+                    na.rm = TRUE)
+
+# Create categorical BMI variable
+projectData$BMIgroup <- cut(projectData$mat_BMI,
+                            breaks = c(-Inf, medianBMI, Inf),
+                            labels = c('Lower BMI','Higher BMI'))
+
+# Check number of subjects in each BMI group
+table(projectData$BMIgroup)
+```
+```{r}
+# Generate histogram of TBL1X expression
+ggplot(projectData,
+       aes(x = TBL1X)) +
+  geom_histogram(bins = 30) +
+  labs(x = 'TBL1X Gene Expression',
+       y = 'Frequency') +
+  theme_classic()
+```
+```{r}
+# Restore original vitamin D values
+projectData$mat_vitD <- covarData$mat_vitD
+
+# Remove text from vitamin D values
+projectData$mat_vitD <- sub("vitamind_25\\(0h\\)_ng/ml_whole_blood_baseline: ",
+                            "",
+                            projectData$mat_vitD)
+
+# Convert vitamin D to numeric
+projectData$mat_vitD <- as.numeric(projectData$mat_vitD)
+
+# Check vitamin D values
+summary(projectData$mat_vitD)
+
+# Generate scatterplot
+ggplot(projectData,
+       aes(x = mat_vitD,
+           y = TBL1X)) +
+  geom_point() +
+  geom_smooth(method = lm,
+              se = FALSE) +
+  labs(x = 'Maternal Vitamin D (ng/mL)',
+       y = 'TBL1X Gene Expression') +
+  theme_classic()
+```
+```{r}
+# Remove text from preeclampsia values
+projectData$preg_preeclampsia <- sub("pregnancy_condition: ",
+                                     "",
+                                     projectData$preg_preeclampsia)
+
+# Generate boxplot
+ggplot(projectData,
+       aes(x = preg_preeclampsia,
+           y = TBL1X,
+           fill = BMIgroup)) +
+  geom_boxplot() +
+  labs(x = 'Pregnancy Outcome',
+       y = 'TBL1X Gene Expression',
+       fill = 'BMI Group') +
+  theme_classic()
+```
