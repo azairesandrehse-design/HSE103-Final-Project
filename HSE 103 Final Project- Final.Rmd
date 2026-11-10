@@ -1,0 +1,817 @@
+---
+title: "HSE 103 Final Project"
+author: "Azaire Andre"
+date: "November 11, 2026"
+output: pdf_document
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7,
+                      fig.height = 5)
+
+library(tidyverse)
+library(latex2exp)
+library(pheatmap)
+```
+# Data Import
+
+```{r}
+# Read in covariate data
+covarData <- read.csv(file = "GSE85307_covar-1.csv")
+
+# Read in gene expression data
+geneExpression <- read.csv(file = "GSE85307_geneExpression.csv",
+                           row.names = 1)
+
+# Read in gene name linker
+geneNames <- read.csv(file = "GSE85307_geneNames.csv",
+                      row.names = 1)
+
+# Check dimensions
+dim(covarData)
+dim(geneExpression)
+dim(geneNames)
+
+# Check that sample IDs match
+all(covarData$geoID %in% colnames(geneExpression))
+all(colnames(geneExpression) %in% covarData$geoID)
+```
+
+# Selected Genes
+
+```{r}
+# Store selected genes
+selectedGenes <- c("TBL1X",
+                   "KDM1B",
+                   "TMEM176B")
+
+# Identify probe IDs using R
+geneProbeMap <- geneNames[
+  geneNames$GENE %in% selectedGenes,
+  ,
+  drop = FALSE
+]
+
+# Save probe IDs from row names
+geneProbeMap$PROBEID <- rownames(geneProbeMap)
+
+# Put genes in selected order
+geneProbeMap <- geneProbeMap[
+  match(selectedGenes,
+        geneProbeMap$GENE),
+  ,
+  drop = FALSE
+]
+
+# Check probe IDs
+geneProbeMap
+
+# Verify that all selected genes were found
+all(selectedGenes %in%
+      geneProbeMap$GENE)
+
+# Verify that all probe IDs are in expression data
+all(geneProbeMap$PROBEID %in%
+      rownames(geneExpression))
+```
+
+# Data Wrangling
+
+```{r}
+# Create project data frame
+projectData <- covarData
+
+# Remove text from BMI values
+projectData$mat_BMI <- sub(
+  "bmi_kg/m2: ",
+  "",
+  projectData$mat_BMI
+)
+
+# Convert BMI to numeric
+projectData$mat_BMI <- as.numeric(
+  projectData$mat_BMI
+)
+
+# Calculate median BMI
+medianBMI <- median(
+  projectData$mat_BMI,
+  na.rm = TRUE
+)
+
+# Create categorical BMI variable
+# Labels incorporate Submission 1 feedback
+projectData$BMIgroup <- cut(
+  projectData$mat_BMI,
+  breaks = c(-Inf,
+             medianBMI,
+             Inf),
+  labels = c("Below Median BMI",
+             "Above Median BMI")
+)
+
+# Remove text from vitamin D values
+projectData$mat_vitD <- sub(
+  "vitamind_25\\(0h\\)_ng/ml_whole_blood_baseline: ",
+  "",
+  projectData$mat_vitD
+)
+
+# Convert vitamin D to numeric
+projectData$mat_vitD <- as.numeric(
+  projectData$mat_vitD
+)
+
+# Remove text from pregnancy outcome values
+projectData$preg_preeclampsia <- sub(
+  "pregnancy_condition: ",
+  "",
+  projectData$preg_preeclampsia
+)
+
+# Set pregnancy outcome order
+projectData$preg_preeclampsia <- factor(
+  projectData$preg_preeclampsia,
+  levels = c("Normal",
+             "Preeclampsia")
+)
+
+# Check cleaned variables
+summary(projectData$mat_BMI)
+summary(projectData$mat_vitD)
+table(projectData$BMIgroup)
+table(projectData$preg_preeclampsia)
+```
+
+# Add Selected Gene Expression
+
+```{r}
+# Select expression rows using probe IDs identified in R
+selectedExpression <- geneExpression[
+  geneProbeMap$PROBEID,
+  projectData$geoID,
+  drop = FALSE
+]
+
+# Replace probe IDs with gene names
+rownames(selectedExpression) <-
+  geneProbeMap$GENE
+
+# Transpose so genes become columns
+selectedExpression <-
+  as.data.frame(
+    t(selectedExpression)
+  )
+
+# Combine covariate and expression data
+analysisData <- cbind(
+  projectData,
+  selectedExpression
+)
+
+# Check selected gene values
+summary(
+  analysisData[, selectedGenes]
+)
+
+# Check categorical variables
+table(analysisData$BMIgroup)
+table(analysisData$preg_preeclampsia)
+```
+
+# Plotting Function
+
+```{r}
+buildGenePlots <- function(data, geneList) {
+
+  # Create empty list to store plots
+  plotList <- list()
+
+  # Loop through each gene
+  for (gene in geneList) {
+
+    # Make a temporary copy of the data
+    tempData <- data
+
+    # Save current gene expression in one column
+    tempData$geneExpression <-
+      tempData[, gene]
+
+    # Create italicized gene labels
+    geneAxis <- TeX(
+      paste0(
+        "$\\it{",
+        gene,
+        "}$ Gene Expression"
+      )
+    )
+
+    histTitle <- TeX(
+      paste0(
+        "$\\it{",
+        gene,
+        "}$ Gene Expression Distribution"
+      )
+    )
+
+    scatterTitle <- TeX(
+      paste0(
+        "Maternal Vitamin D and ",
+        "$\\it{",
+        gene,
+        "}$ Expression"
+      )
+    )
+
+    boxTitle <- TeX(
+      paste0(
+        "$\\it{",
+        gene,
+        "}$ Expression by Pregnancy Outcome and Maternal BMI"
+      )
+    )
+
+    # Histogram
+    histPlot <- ggplot(
+      tempData,
+      aes(x = geneExpression)
+    ) +
+      geom_histogram(
+        bins = 30
+      ) +
+      labs(
+        title = histTitle,
+        x = geneAxis,
+        y = "Frequency"
+      ) +
+      theme_classic()
+
+    # Scatterplot
+    scatterPlot <- ggplot(
+      tempData,
+      aes(
+        x = mat_vitD,
+        y = geneExpression
+      )
+    ) +
+      geom_point() +
+      geom_smooth(
+        method = lm,
+        se = FALSE
+      ) +
+      labs(
+        title = scatterTitle,
+        x = "Maternal Vitamin D (ng/mL)",
+        y = geneAxis
+      ) +
+      theme_classic()
+
+    # Boxplot
+    boxPlot <- ggplot(
+      tempData,
+      aes(
+        x = preg_preeclampsia,
+        y = geneExpression,
+        fill = BMIgroup
+      )
+    ) +
+      geom_boxplot() +
+      labs(
+        title = boxTitle,
+        x = "Pregnancy Outcome",
+        y = geneAxis,
+        fill = "Maternal BMI Group"
+      ) +
+      theme_classic()
+
+    # Save histogram
+    plotList[[
+      paste0(
+        gene,
+        "_histogram"
+      )
+    ]] <- histPlot
+
+    # Save scatterplot
+    plotList[[
+      paste0(
+        gene,
+        "_scatterplot"
+      )
+    ]] <- scatterPlot
+
+    # Save boxplot
+    plotList[[
+      paste0(
+        gene,
+        "_boxplot"
+      )
+    ]] <- boxPlot
+  }
+
+  return(plotList)
+}
+```
+
+# Generate the Nine Required Plots
+
+```{r}
+# Run function for all three genes
+genePlots <- buildGenePlots(
+  data = analysisData,
+  geneList = selectedGenes
+)
+
+# Confirm that 9 plots were created
+length(genePlots)
+
+# Check plot names
+names(genePlots)
+```
+
+## TBL1X
+
+```{r}
+genePlots[["TBL1X_histogram"]]
+genePlots[["TBL1X_scatterplot"]]
+genePlots[["TBL1X_boxplot"]]
+```
+
+## KDM1B
+
+```{r}
+genePlots[["KDM1B_histogram"]]
+genePlots[["KDM1B_scatterplot"]]
+genePlots[["KDM1B_boxplot"]]
+```
+
+## TMEM176B
+
+```{r}
+genePlots[["TMEM176B_histogram"]]
+genePlots[["TMEM176B_scatterplot"]]
+genePlots[["TMEM176B_boxplot"]]
+```
+# Summary Statistics
+
+```{r}
+# Remove text from maternal age values
+analysisData$mat_age_yrs <- sub(
+  "age_years: ",
+  "",
+  analysisData$mat_age_yrs
+)
+
+# Convert maternal age to numeric
+analysisData$mat_age_yrs <- as.numeric(
+  analysisData$mat_age_yrs
+)
+
+# Check maternal age values
+summary(analysisData$mat_age_yrs)
+``` 
+```{r}
+# Check maternal asthma values
+unique(analysisData$mat_asthma)
+```
+```{r}
+# Remove text from maternal asthma values
+analysisData$mat_asthma <- sub(
+  "asthma_0=healthy_1=asthmatic: ",
+  "",
+  analysisData$mat_asthma
+)
+
+# Change asthma values to labels
+analysisData$mat_asthma <- factor(
+  analysisData$mat_asthma,
+  levels = c("0", "1"),
+  labels = c("Healthy", "Asthmatic")
+)
+
+# Check maternal asthma values
+table(analysisData$mat_asthma)
+```
+# Summary Statistics Table
+
+```{r}
+# Separate data by pregnancy outcome
+normalData <- analysisData[
+  analysisData$preg_preeclampsia == "Normal",
+]
+
+preeclampsiaData <- analysisData[
+  analysisData$preg_preeclampsia == "Preeclampsia",
+]
+
+# Create empty summary table
+summaryTable <- data.frame(
+  Variable = character(),
+  Normal = character(),
+  Preeclampsia = character(),
+  stringsAsFactors = FALSE
+)
+
+# Maternal age
+normalMean <- round(mean(normalData$mat_age_yrs,
+                         na.rm = TRUE), 2)
+normalSD <- round(sd(normalData$mat_age_yrs,
+                     na.rm = TRUE), 2)
+
+preeclampsiaMean <- round(mean(preeclampsiaData$mat_age_yrs,
+                               na.rm = TRUE), 2)
+preeclampsiaSD <- round(sd(preeclampsiaData$mat_age_yrs,
+                           na.rm = TRUE), 2)
+
+summaryTable <- rbind(
+  summaryTable,
+  data.frame(
+    Variable = "Maternal Age, years",
+    Normal = paste0(normalMean,
+                    " (", normalSD, ")"),
+    Preeclampsia = paste0(preeclampsiaMean,
+                          " (", preeclampsiaSD, ")")
+  )
+)
+
+# Maternal BMI
+normalMean <- round(mean(normalData$mat_BMI,
+                         na.rm = TRUE), 2)
+normalSD <- round(sd(normalData$mat_BMI,
+                     na.rm = TRUE), 2)
+
+preeclampsiaMean <- round(mean(preeclampsiaData$mat_BMI,
+                               na.rm = TRUE), 2)
+preeclampsiaSD <- round(sd(preeclampsiaData$mat_BMI,
+                           na.rm = TRUE), 2)
+
+summaryTable <- rbind(
+  summaryTable,
+  data.frame(
+    Variable = "Maternal BMI",
+    Normal = paste0(normalMean,
+                    " (", normalSD, ")"),
+    Preeclampsia = paste0(preeclampsiaMean,
+                          " (", preeclampsiaSD, ")")
+  )
+)
+
+# Maternal vitamin D
+normalMean <- round(mean(normalData$mat_vitD,
+                         na.rm = TRUE), 2)
+normalSD <- round(sd(normalData$mat_vitD,
+                     na.rm = TRUE), 2)
+
+preeclampsiaMean <- round(mean(preeclampsiaData$mat_vitD,
+                               na.rm = TRUE), 2)
+preeclampsiaSD <- round(sd(preeclampsiaData$mat_vitD,
+                           na.rm = TRUE), 2)
+
+summaryTable <- rbind(
+  summaryTable,
+  data.frame(
+    Variable = "Maternal Vitamin D, ng/mL",
+    Normal = paste0(normalMean,
+                    " (", normalSD, ")"),
+    Preeclampsia = paste0(preeclampsiaMean,
+                          " (", preeclampsiaSD, ")")
+  )
+)
+
+# BMI group header
+summaryTable <- rbind(
+  summaryTable,
+  data.frame(
+    Variable = "Maternal BMI Group",
+    Normal = "",
+    Preeclampsia = ""
+  )
+)
+
+# BMI group categories
+for (level in levels(analysisData$BMIgroup)) {
+
+  normalN <- sum(normalData$BMIgroup == level,
+                 na.rm = TRUE)
+
+  normalPerc <- round(
+    normalN / nrow(normalData) * 100,
+    1
+  )
+
+  preeclampsiaN <- sum(
+    preeclampsiaData$BMIgroup == level,
+    na.rm = TRUE
+  )
+
+  preeclampsiaPerc <- round(
+    preeclampsiaN /
+      nrow(preeclampsiaData) * 100,
+    1
+  )
+
+  summaryTable <- rbind(
+    summaryTable,
+    data.frame(
+      Variable = paste0("  ", level),
+      Normal = paste0(normalN,
+                      " (", normalPerc, "%)"),
+      Preeclampsia = paste0(preeclampsiaN,
+                            " (", preeclampsiaPerc, "%)")
+    )
+  )
+}
+
+# Maternal asthma header
+summaryTable <- rbind(
+  summaryTable,
+  data.frame(
+    Variable = "Maternal Asthma",
+    Normal = "",
+    Preeclampsia = ""
+  )
+)
+
+# Maternal asthma categories
+for (level in levels(analysisData$mat_asthma)) {
+
+  normalN <- sum(normalData$mat_asthma == level,
+                 na.rm = TRUE)
+
+  normalPerc <- round(
+    normalN / nrow(normalData) * 100,
+    1
+  )
+
+  preeclampsiaN <- sum(
+    preeclampsiaData$mat_asthma == level,
+    na.rm = TRUE
+  )
+
+  preeclampsiaPerc <- round(
+    preeclampsiaN /
+      nrow(preeclampsiaData) * 100,
+    1
+  )
+
+  summaryTable <- rbind(
+    summaryTable,
+    data.frame(
+      Variable = paste0("  ", level),
+      Normal = paste0(normalN,
+                      " (", normalPerc, "%)"),
+      Preeclampsia = paste0(preeclampsiaN,
+                            " (", preeclampsiaPerc, "%)")
+    )
+  )
+}
+
+# Display summary table
+knitr::kable(
+  summaryTable,
+  caption = "Summary Statistics Stratified by Pregnancy Outcome",
+  col.names = c(
+    "Variable",
+    paste0("Normal (n = ",
+           nrow(normalData), ")"),
+    paste0("Preeclampsia (n = ",
+           nrow(preeclampsiaData), ")")
+  ),
+  align = c("l", "c", "c")
+)
+```
+
+# Heatmap
+```{r}
+# Match gene names to probes in the expression data
+heatmapGeneMap <- geneNames[
+  rownames(geneNames) %in% rownames(geneExpression),
+  ,
+  drop = FALSE
+]
+
+# Save probe IDs
+heatmapGeneMap$PROBEID <- rownames(heatmapGeneMap)
+
+# Remove missing gene names
+heatmapGeneMap <- heatmapGeneMap[
+  !is.na(heatmapGeneMap$GENE),
+  ,
+  drop = FALSE
+]
+
+# Calculate variance for each probe
+geneVariance <- apply(
+  geneExpression,
+  1,
+  var
+)
+
+# Add variance to gene map
+heatmapGeneMap$Variance <-
+  geneVariance[heatmapGeneMap$PROBEID]
+
+# Remove genes already used in Submission 2
+additionalGenes <- heatmapGeneMap[
+  !(heatmapGeneMap$GENE %in% selectedGenes),
+  ,
+  drop = FALSE
+]
+
+# Put highest variance genes first
+additionalGenes <- additionalGenes[
+  order(
+    additionalGenes$Variance,
+    decreasing = TRUE
+  ),
+]
+
+# Remove duplicate gene names
+additionalGenes <- additionalGenes[
+  !duplicated(additionalGenes$GENE),
+]
+
+# Select top 7 additional genes
+additionalGenes <- additionalGenes[1:7, ]
+
+# Combine with the 3 selected genes
+heatmapGenes <- c(
+  selectedGenes,
+  additionalGenes$GENE
+)
+
+# Check selected genes
+heatmapGenes
+length(heatmapGenes)
+```
+
+```{r}
+# Find probe IDs for the 10 heatmap genes
+heatmapMap <- heatmapGeneMap[
+  heatmapGeneMap$GENE %in% heatmapGenes,
+  ,
+  drop = FALSE
+]
+
+# Put genes in selected order
+heatmapMap <- heatmapMap[
+  match(
+    heatmapGenes,
+    heatmapMap$GENE
+  ),
+  ,
+  drop = FALSE
+]
+
+# Create expression matrix
+heatmapData <- geneExpression[
+  heatmapMap$PROBEID,
+  analysisData$geoID,
+  drop = FALSE
+]
+
+# Replace probe IDs with gene names
+rownames(heatmapData) <- heatmapMap$GENE
+
+# Convert to matrix
+heatmapData <- as.matrix(heatmapData)
+
+# Check dimensions
+dim(heatmapData)
+```
+```{r}
+# Create tracking bar information
+heatmapAnnotation <- data.frame(
+  Pregnancy_Outcome = analysisData$preg_preeclampsia,
+  BMI_Group = analysisData$BMIgroup
+)
+
+# Match annotation rows to heatmap columns
+rownames(heatmapAnnotation) <- analysisData$geoID
+
+# Check annotation data
+head(heatmapAnnotation)
+```
+
+```{r, fig.width=10, fig.height=7}
+# Create clustered heatmap
+pheatmap(
+  heatmapData,
+  scale = "row",
+  annotation_col = heatmapAnnotation,
+  clustering_distance_rows = "euclidean",
+  clustering_distance_cols = "euclidean",
+  cluster_rows = TRUE,
+  cluster_cols = TRUE,
+  show_colnames = FALSE,
+  main = "Gene Expression Across Maternal Samples"
+)
+```
+
+# Additional Plot
+
+```{r}
+# Create empty data frame for mean differences
+lollipopData <- data.frame(
+  Gene = character(),
+  Difference = numeric(),
+  stringsAsFactors = FALSE
+)
+
+# Identify normal and preeclampsia samples
+normalSamples <- analysisData$geoID[
+  analysisData$preg_preeclampsia == "Normal"
+]
+
+preeclampsiaSamples <- analysisData$geoID[
+  analysisData$preg_preeclampsia == "Preeclampsia"
+]
+
+# Calculate mean expression difference for each gene
+for (gene in heatmapGenes) {
+
+  normalMean <- mean(
+    heatmapData[
+      gene,
+      normalSamples
+    ],
+    na.rm = TRUE
+  )
+
+  preeclampsiaMean <- mean(
+    heatmapData[
+      gene,
+      preeclampsiaSamples
+    ],
+    na.rm = TRUE
+  )
+
+  meanDifference <- preeclampsiaMean - normalMean
+
+  lollipopData <- rbind(
+    lollipopData,
+    data.frame(
+      Gene = gene,
+      Difference = meanDifference
+    )
+  )
+}
+
+# Order genes by mean difference
+lollipopData <- lollipopData[
+  order(lollipopData$Difference),
+]
+
+# Set gene order
+lollipopData$Gene <- factor(
+  lollipopData$Gene,
+  levels = lollipopData$Gene
+)
+
+# Check data
+lollipopData
+```
+```{r, fig.width=8, fig.height=6}
+# Create lollipop plot
+ggplot(
+  lollipopData,
+  aes(
+    x = Difference,
+    y = Gene
+  )
+) +
+  geom_segment(
+    aes(
+      x = 0,
+      xend = Difference,
+      y = Gene,
+      yend = Gene
+    )
+  ) +
+  geom_point(
+    size = 3
+  ) +
+  geom_vline(
+    xintercept = 0,
+    linetype = "dashed"
+  ) +
+  labs(
+    title = "Mean Gene Expression Differences by Pregnancy Outcome",
+    x = "Mean Expression Difference (Preeclampsia - Normal)",
+    y = "Gene"
+  ) +
+  scale_y_discrete(
+    labels = function(x) {
+      parse(
+        text = paste0(
+          "italic('",
+          x,
+          "')"
+        )
+      )
+    }
+  ) +
+  theme_classic()
+```
