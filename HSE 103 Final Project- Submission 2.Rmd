@@ -1,0 +1,263 @@
+---
+title: "HSE 103 Final Project: Submission 2"
+author: "Azaire Andre"
+date: "November 2, 2026"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      message = FALSE,
+                      warning = FALSE,
+                      fig.width = 7,
+                      fig.height = 5)
+
+library(tidyverse)
+```
+
+# Data Import
+
+```{r}
+# Read in covariate data
+covarData <- read.csv(file = "GSE85307_covar-1.csv")
+
+# Read in gene expression data
+geneExpression <- read.csv(file = "GSE85307_geneExpression.csv",
+                           row.names = 1)
+
+# Read in gene name linker
+geneNames <- read.csv(file = "GSE85307_geneNames.csv",
+                      row.names = 1)
+
+# Check that sample IDs match
+all(covarData$geoID %in% colnames(geneExpression))
+all(colnames(geneExpression) %in% covarData$geoID)
+```
+
+# Selected Genes
+
+For Submission 2, I retained **TBL1X** from Submission 1 and added
+**KDM1B** and **TMEM176B**.
+
+```{r}
+# Store selected genes
+selectedGenes <- c("TBL1X", "KDM1B", "TMEM176B")
+
+# Identify probe IDs using R
+geneProbeMap <- geneNames[
+  geneNames$GENE %in% selectedGenes,
+  ,
+  drop = FALSE
+]
+
+# Save probe IDs from row names
+geneProbeMap$PROBEID <- rownames(geneProbeMap)
+
+# Put genes in selected order
+geneProbeMap <- geneProbeMap[
+  match(selectedGenes, geneProbeMap$GENE),
+  ,
+  drop = FALSE
+]
+
+# Check probe IDs
+geneProbeMap
+
+# Verify that all selected genes and probe IDs were found
+all(selectedGenes %in% geneProbeMap$GENE)
+all(geneProbeMap$PROBEID %in% rownames(geneExpression))
+```
+
+# Data Wrangling
+
+```{r}
+# Create project data frame
+projectData <- covarData
+
+# Remove text from BMI values
+projectData$mat_BMI <- sub("bmi_kg/m2: ",
+                           "",
+                           projectData$mat_BMI)
+
+# Convert BMI to numeric
+projectData$mat_BMI <- as.numeric(projectData$mat_BMI)
+
+# Calculate median BMI
+medianBMI <- median(projectData$mat_BMI,
+                    na.rm = TRUE)
+
+# Create categorical BMI variable
+# Labels were changed based on Submission 1 feedback
+projectData$BMIgroup <- cut(
+  projectData$mat_BMI,
+  breaks = c(-Inf, medianBMI, Inf),
+  labels = c("Below Median BMI",
+             "Above Median BMI")
+)
+
+# Remove text from vitamin D values
+projectData$mat_vitD <- sub(
+  "vitamind_25\\(0h\\)_ng/ml_whole_blood_baseline: ",
+  "",
+  projectData$mat_vitD
+)
+
+# Convert vitamin D to numeric
+projectData$mat_vitD <- as.numeric(projectData$mat_vitD)
+
+# Remove text from pregnancy outcome values
+projectData$preg_preeclampsia <- sub(
+  "pregnancy_condition: ",
+  "",
+  projectData$preg_preeclampsia
+)
+
+# Set pregnancy outcome order
+projectData$preg_preeclampsia <- factor(
+  projectData$preg_preeclampsia,
+  levels = c("Normal", "Preeclampsia")
+)
+```
+
+# Add Selected Gene Expression
+
+```{r}
+# Select expression rows using the probe IDs identified by R
+selectedExpression <- geneExpression[
+  geneProbeMap$PROBEID,
+  projectData$geoID,
+  drop = FALSE
+]
+
+# Replace probe IDs with gene names
+rownames(selectedExpression) <- geneProbeMap$GENE
+
+# Transpose so genes become columns
+selectedExpression <- as.data.frame(t(selectedExpression))
+
+# Combine expression data with covariate data
+analysisData <- cbind(projectData,
+                      selectedExpression)
+
+# Check selected gene values
+summary(analysisData[, selectedGenes])
+
+# Check categorical variables
+table(analysisData$BMIgroup)
+table(analysisData$preg_preeclampsia)
+```
+
+# Plotting Function
+
+The function below takes a data frame and a list of one or more gene names.
+It loops through each gene and creates the three plots required for the
+project.
+
+```{r}
+buildGenePlots <- function(data, geneList) {
+
+  # Create empty list to store plots
+  plotList <- list()
+
+  # Loop through each gene
+  for (gene in geneList) {
+
+    # Make a temporary copy of the data
+    tempData <- data
+
+    # Save the current gene expression values in one column
+    tempData$geneExpression <- tempData[, gene]
+
+    # Histogram
+    histPlot <- ggplot(tempData,
+                       aes(x = geneExpression)) +
+      geom_histogram(bins = 30) +
+      labs(title = paste(gene,
+                         "Gene Expression Distribution"),
+           x = paste(gene,
+                     "Gene Expression"),
+           y = "Frequency") +
+      theme_classic()
+
+    # Scatterplot
+    scatterPlot <- ggplot(tempData,
+                          aes(x = mat_vitD,
+                              y = geneExpression)) +
+      geom_point() +
+      geom_smooth(method = lm,
+                  se = FALSE) +
+      labs(title = paste("Maternal Vitamin D and",
+                         gene,
+                         "Expression"),
+           x = "Maternal Vitamin D (ng/mL)",
+           y = paste(gene,
+                     "Gene Expression")) +
+      theme_classic()
+
+    # Boxplot
+    boxPlot <- ggplot(tempData,
+                      aes(x = preg_preeclampsia,
+                          y = geneExpression,
+                          fill = BMIgroup)) +
+      geom_boxplot() +
+      labs(title = paste(gene,
+                         "Expression by Pregnancy Outcome and Maternal BMI"),
+           x = "Pregnancy Outcome",
+           y = paste(gene,
+                     "Gene Expression"),
+           fill = "Maternal BMI") +
+      theme_classic()
+
+    # Save plots to list
+    plotList[[paste0(gene,
+                     "_histogram")]] <- histPlot
+
+    plotList[[paste0(gene,
+                     "_scatterplot")]] <- scatterPlot
+
+    plotList[[paste0(gene,
+                     "_boxplot")]] <- boxPlot
+  }
+
+  return(plotList)
+}
+```
+
+# Generate the Nine Required Plots
+
+```{r}
+# Run function for all three genes
+genePlots <- buildGenePlots(
+  data = analysisData,
+  geneList = selectedGenes
+)
+
+# Confirm that 9 plots were created
+length(genePlots)
+
+# Check plot names
+names(genePlots)
+```
+
+## TBL1X
+
+```{r}
+genePlots[["TBL1X_histogram"]]
+genePlots[["TBL1X_scatterplot"]]
+genePlots[["TBL1X_boxplot"]]
+```
+
+## KDM1B
+
+```{r}
+genePlots[["KDM1B_histogram"]]
+genePlots[["KDM1B_scatterplot"]]
+genePlots[["KDM1B_boxplot"]]
+```
+
+## TMEM176B
+
+```{r}
+genePlots[["TMEM176B_histogram"]]
+genePlots[["TMEM176B_scatterplot"]]
+genePlots[["TMEM176B_boxplot"]]
+```
